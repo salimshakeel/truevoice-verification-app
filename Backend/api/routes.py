@@ -1,14 +1,19 @@
-from fastapi import APIRouter
-from ..services.challenge import get_random_phrase
-from fastapi import UploadFile, File, HTTPException, Form
-import shutil
-import os
-from ..services.ecapa_utils import extract_speaker_embedding, verify_speakers
+from fastapi import APIRouter, UploadFile, File, HTTPException, Form
 from pydantic import BaseModel
 from typing import Optional
+import os
+import shutil
+from ..services.audio_utils import convert_to_wav
 
+from ..services.challenge import get_random_phrase
+from ..services.ecapa_utils import extract_speaker_embedding, verify_speakers
+from ..services.whisper_utils import transcribe_audio
+from rapidfuzz import fuzz
+
+# 🔐 Create the router first
 router = APIRouter()
 
+# 🧾 Response Models
 class ChallengeResponse(BaseModel):
     challenge_phrase: str
 
@@ -23,38 +28,41 @@ class VerifyResponse(BaseModel):
     is_match: bool
     message: str
 
-@router.get("/generate-challenge", response_model=ChallengeResponse)
-def generate_challenge():
-    """
-    Returns a one-time random phrase for the user to speak aloud.
-    """
-    phrase = get_random_phrase()
-    return ChallengeResponse(challenge_phrase=phrase)
+# ✅ Health check
+@router.get("/health")
+def health_check():
+    return {"status": "healthy", "message": "Truevoice API is running"}
 
 
-# Enroll Voice Endpoint
+# 🎙️ Enroll Voice
 @router.post("/enroll-voice", response_model=EnrollResponse)
 async def enroll_voice(user_id: str = Form(...), audio: UploadFile = File(...)):
     """
     Enroll a user's voiceprint (speaker identity) using ECAPA embedding.
+    Accepts any audio format and converts to .wav
     """
     try:
-        # Create temp directory if it doesn't exist
         os.makedirs("temp", exist_ok=True)
-        
-        file_location = f"temp/{user_id}_enroll.wav"
-        with open(file_location, "wb") as buffer:
+
+        # Save original uploaded file with extension
+        raw_path = f"temp/{user_id}_raw.{audio.filename.split('.')[-1]}"
+        with open(raw_path, "wb") as buffer:
             shutil.copyfileobj(audio.file, buffer)
 
-        embedding = extract_speaker_embedding(file_location)
+        # Convert to .wav format
+        wav_path = f"temp/{user_id}_enroll.wav"
+        convert_to_wav(raw_path, wav_path)
 
-        # Save embedding to file
+        # Extract speaker embedding from .wav
+        embedding = extract_speaker_embedding(wav_path)
+
+        # Save embedding
         embedding_file = f"temp/{user_id}_embedding.txt"
         with open(embedding_file, "w") as f:
             f.write(",".join(map(str, embedding)))
 
         return EnrollResponse(
-            status="success", 
+            status="success",
             message=f"Voice enrolled for {user_id}",
             user_id=user_id
         )
@@ -64,57 +72,96 @@ async def enroll_voice(user_id: str = Form(...), audio: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Enrollment failed: {str(e)}")
 
-# Verify Voice Endpoint
-@router.post("/verify-voice", response_model=VerifyResponse)
+# 📌 Generate Challenge
+@router.get("/get-challenge", response_model=ChallengeResponse)
+def generate_challenge():
+    phrase = get_random_phrase()
+    return ChallengeResponse(challenge_phrase=phrase)
+
+# 🎧 Verify Voice Identity
+@router.post("/verify-identity", response_model=VerifyResponse)
 async def verify_voice(
     user_id: str = Form(...), 
     audio: UploadFile = File(...),
     threshold: float = Form(0.5)
 ):
-    """
-    Verify a user's voice against their enrolled voiceprint.
-    """
     try:
-        # Create temp directory if it doesn't exist
         os.makedirs("temp", exist_ok=True)
-        
-        # Check if user is enrolled
-        embedding_file = f"temp/{user_id}_embedding.txt"
-        if not os.path.exists(embedding_file):
-            raise HTTPException(status_code=404, detail=f"User {user_id} not enrolled")
-        
-        # Save verification audio
-        verify_file = f"temp/{user_id}_verify.wav"
-        with open(verify_file, "wb") as buffer:
+
+        # Save uploaded audio
+        raw_path = f"temp/{user_id}_raw_verify.{audio.filename.split('.')[-1]}"
+        with open(raw_path, "wb") as buffer:
             shutil.copyfileobj(audio.file, buffer)
-        
-        # Get enrolled audio file
+
+        # Convert to wav
+        verify_file = f"temp/{user_id}_verify.wav"
+        convert_to_wav(raw_path, verify_file)
+
+        # Check enroll file exists
         enroll_file = f"temp/{user_id}_enroll.wav"
         if not os.path.exists(enroll_file):
             raise HTTPException(status_code=404, detail=f"Enrollment audio not found for {user_id}")
-        
-        # Verify speakers
+
         score, prediction = verify_speakers(enroll_file, verify_file)
+        score = float(score)
         is_match = score > threshold
-        
+
         return VerifyResponse(
             status="success",
             score=float(score),
             is_match=is_match,
             message=f"Verification completed. Score: {score:.3f}, Match: {is_match}"
         )
-        
-    except HTTPException:
-        raise
-    except FileNotFoundError as e:
-        raise HTTPException(status_code=400, detail=f"Audio file error: {str(e)}")
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Verification failed: {str(e)}")
 
-# Health check endpoint
-@router.get("/health")
-def health_check():
-    """
-    Health check endpoint to verify API is running.
-    """
-    return {"status": "healthy", "message": "Truevoice API is running"}
+
+# 🔐 Secure Verify (Liveness + Identity)
+@router.post("/verify-secure")
+async def secure_verify_voice(
+    user_id: str = Form(...),
+    challenge_phrase: str = Form(...),
+    audio: UploadFile = File(...),
+    threshold: float = Form(0.5)
+):
+    try:
+        os.makedirs("temp", exist_ok=True)
+
+        # Save raw file
+        raw_path = f"temp/{user_id}_raw_test.{audio.filename.split('.')[-1]}"
+        with open(raw_path, "wb") as buffer:
+            shutil.copyfileobj(audio.file, buffer)
+
+        # Convert to wav
+        test_file = f"temp/{user_id}_test.wav"
+        convert_to_wav(raw_path, test_file)
+
+        enroll_file = f"temp/{user_id}_enroll.wav"
+        if not os.path.exists(enroll_file):
+            raise HTTPException(status_code=404, detail=f"User {user_id} not enrolled")
+
+        # Identity check
+        score, _ = verify_speakers(enroll_file, test_file)
+        score = float(score)
+        identity_verified = score > threshold
+
+        # Liveness check
+        transcript = transcribe_audio(test_file)
+        similarity = fuzz.partial_ratio(transcript, challenge_phrase.lower())
+        liveness_verified = similarity >= 80
+
+        return {
+            "user_id": user_id,
+            "identity_verified": identity_verified,
+            "liveness_verified": liveness_verified,
+            "speaker_score": round(float(score), 3),
+            "transcript": transcript,
+            "challenge_phrase": challenge_phrase,
+            "similarity_score": similarity
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Secure verification failed: {str(e)}")
+
+
