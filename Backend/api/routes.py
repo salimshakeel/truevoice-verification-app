@@ -73,13 +73,13 @@ async def enroll_voice(user_id: str = Form(...), audio: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=f"Enrollment failed: {str(e)}")
 
 # 📌 Generate Challenge
-@router.get("/get-challenge", response_model=ChallengeResponse)
+@router.get("/generate-challenge", response_model=ChallengeResponse)
 def generate_challenge():
     phrase = get_random_phrase()
     return ChallengeResponse(challenge_phrase=phrase)
 
 # 🎧 Verify Voice Identity
-@router.post("/verify-identity", response_model=VerifyResponse)
+@router.post("/verify_voice", response_model=VerifyResponse)
 async def verify_voice(
     user_id: str = Form(...), 
     audio: UploadFile = File(...),
@@ -118,7 +118,7 @@ async def verify_voice(
 
 
 # 🔐 Secure Verify (Liveness + Identity)
-@router.post("/verify-secure")
+@router.post("/secure_verify_voice")
 async def secure_verify_voice(
     user_id: str = Form(...),
     challenge_phrase: str = Form(...),
