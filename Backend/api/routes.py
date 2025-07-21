@@ -70,7 +70,9 @@ async def enroll_voice(user_id: str = Form(...), audio: UploadFile = File(...)):
     except FileNotFoundError as e:
         raise HTTPException(status_code=400, detail=f"Audio file error: {str(e)}")
     except Exception as e:
+        print(f"🔥 ERROR in /enroll-voice: {e}")
         raise HTTPException(status_code=500, detail=f"Enrollment failed: {str(e)}")
+
 
 # 📌 Generate Challenge
 @router.get("/generate-challenge", response_model=ChallengeResponse)
@@ -122,9 +124,17 @@ async def verify_voice(
 async def secure_verify_voice(
     user_id: str = Form(...),
     challenge_phrase: str = Form(...),
-    audio: UploadFile = File(...),
-    threshold: float = Form(0.5)
+    threshold: float = Form(0.5),
+    audio: UploadFile = File(...)
+    
 ):
+    # Debugging: Print uploaded file details
+    print(f"DEBUG: Received file - {audio.filename}")
+    print(f"DEBUG: Content type - {audio.content_type}")
+    print(f"DEBUG: User ID - {user_id}")
+    print(f"DEBUG: Challenge Phrase - {challenge_phrase}")
+    print(f"DEBUG: Threshold - {threshold}")
+    
     try:
         os.makedirs("temp", exist_ok=True)
 
