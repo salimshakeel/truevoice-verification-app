@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: truevoice-backend
+    env: python
+    region: oregon
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: bash Backend/start.sh
+    runtime: python
+    branch: main
+    autoDeploy: true
