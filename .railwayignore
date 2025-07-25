@@ -1,0 +1,18 @@
+# Ignore frontend
+frontend/
+Frontend/
+
+# Ignore development & test folders
+temp/
+test/
+tests/
+
+# Ignore common unnecessary files/folders
+node_modules/
+.vscode/
+__pycache__/
+*.pyc
+*.log
+.env
+*.zip
+*.tar.gz
